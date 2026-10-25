@@ -19,7 +19,7 @@
 2. **מסד נתונים:** ב־`supabase/setup.sql` מחליפים את `__PROJECT_URL__` בכתובת הפרויקט, ומריצים את כל הקובץ ב־SQL Editor.
 3. **פונקציית ההתראות:** Edge Functions → Deploy a new function → Via Editor. השם חייב להיות `send-reminders`. מדביקים את `supabase/functions/send-reminders/index.ts` ולוחצים Deploy. אחר כך, בהגדרות הפונקציה, מכבים את **Verify JWT** (הקריאה מהתזמון נבדקת בסוד משלה).
 4. **משתמשים:** Authentication → Users → Add user → Create new user, עם אימייל וסיסמה לכל אחד, ומסמנים Auto Confirm. ב־Authentication → Sign In / Providers מכבים את **Allow new users to sign up**, כדי שרק שניכם תוכלו להיכנס.
-5. **האתר:** ב־GitHub, Settings → Pages → Deploy from a branch, בוחרים את הענף ואת התיקייה `/ (root)`. הכתובת תהיה `https://aroniko11.github.io/mutual-calendar/`.
+5. **האתר:** ב־GitHub, Settings → Pages → Deploy from a branch, בוחרים את הענף `main` ואת התיקייה `/ (root)`. הכתובת תהיה `https://aroniko11.github.io/mutual-calendar/`.
 
 ## התקנה באייפון
 
