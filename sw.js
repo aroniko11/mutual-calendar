@@ -1,5 +1,5 @@
 // Service worker: offline app shell + Web Push notifications (works while the app is closed).
-const CACHE = 'cal-v1';
+const CACHE = 'cal-v2';
 const SHELL = ['./', './index.html', './config.js', './manifest.webmanifest', './icons/icon-192.png', './icons/apple-touch-icon.png'];
 
 self.addEventListener('install', e => {
