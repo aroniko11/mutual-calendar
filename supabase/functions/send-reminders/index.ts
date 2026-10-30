@@ -129,6 +129,84 @@ export function dueNotes(events: Ev[], alarms: Ev[], now: number): Note[] {
   return out;
 }
 
+// ---------- "the other one changed the calendar" ----------
+const OWNERS: Record<string, string> = { aharon: 'אהרון', tzipi: 'ציפי' };
+const fmtDay = new Intl.DateTimeFormat('he-IL', { timeZone: 'UTC', weekday: 'long', day: 'numeric', month: 'long' });
+export type Change = { id: number; event_id: string; kind: string; user_id: string | null; data: Ev };
+export function changeNote(c: Change) {
+  const e = norm(c.data || {});
+  const who = OWNERS[e.updatedBy] || OWNERS[e.addedBy] || '';
+  const what = `${TYPE_ICON[e.type] || '📌'} ${e.title || 'אירוע'}`;
+  const head = { insert: '➕ אירוע חדש', update: '✏️ עדכון ביומן', cancel: '🚫 אירוע בוטל', delete: '🗑️ אירוע נמחק' }[c.kind] || '✏️ עדכון ביומן';
+  const when = e.date ? `${fmtDay.format(parse(e.date))}${e.allDay ? '' : ' ב־' + e.time}` : '';
+  const cal = c.kind === 'insert' ? 'new' : c.kind === 'update' ? 'edit' : 'gone';
+  return {
+    title: `${head}${who ? ' מ' + who : ''}: ${what}`,
+    body: [when, OWNER_TAG[e.owner], c.kind === 'insert' || c.kind === 'update' ? 'לחצו כדי להוסיף ליומן באייפון' : ''].filter(Boolean).join(' · '),
+    url: c.kind === 'delete' ? SITE : `${SITE}?e=${encodeURIComponent(c.event_id)}&d=${e.date}&cal=${cal}`,
+  };
+}
+// the person (aharon/tzipi) of a change, for phones whose sign-in is unknown
+const changer = (c: Change) => { const e = c.data || {}; return e.updatedBy || (c.kind === 'insert' ? e.addedBy : '') || ''; };
+export function wantsChange(sub: { person?: string | null; alerts?: string; user_id?: string | null; notify_changes?: boolean }, c: Change) {
+  if (sub.notify_changes === false || sub.alerts === 'off') return false;
+  if (sub.user_id && c.user_id) return sub.user_id !== c.user_id;
+  const p = changer(c);
+  return !p || !sub.person || sub.person !== p;
+}
+
+// ---------- .ics file for the iPhone calendar ----------
+const icsEsc = (s: string) => String(s || '').replace(/\\/g, '\\\\').replace(/;/g, '\\;').replace(/,/g, '\\,').replace(/\r?\n/g, '\\n');
+const enc = new TextEncoder();
+const fold = (line: string) => { // lines of at most 75 bytes, never splitting a character
+  const out: string[] = []; let cur = '', n = 0;
+  for (const ch of line) {
+    const b = enc.encode(ch).length;
+    if (n + b > 73) { out.push(cur); cur = ' '; n = 1; }
+    cur += ch; n += b;
+  }
+  out.push(cur); return out.join('\r\n');
+};
+const ymd = (s: string) => s.replace(/-/g, '');
+const utcStamp = (ts: number) => new Date(ts).toISOString().replace(/[-:]/g, '').replace(/\.\d+/, '');
+const dur = (m: number) => `${m < 0 ? '-' : ''}PT${Math.abs(m)}M`;
+export function ics(raw: Ev): string {
+  const e = norm(raw);
+  const L = ['BEGIN:VCALENDAR', 'VERSION:2.0', 'PRODID:-//mutual-calendar//HE', 'CALSCALE:GREGORIAN', 'METHOD:PUBLISH',
+    'BEGIN:VTIMEZONE', 'TZID:Asia/Jerusalem',
+    'BEGIN:DAYLIGHT', 'TZOFFSETFROM:+0200', 'TZOFFSETTO:+0300', 'TZNAME:IDT', 'DTSTART:19700327T020000', 'RRULE:FREQ=YEARLY;BYMONTH=3;BYMONTHDAY=23,24,25,26,27,28,29;BYDAY=FR', 'END:DAYLIGHT',
+    'BEGIN:STANDARD', 'TZOFFSETFROM:+0300', 'TZOFFSETTO:+0200', 'TZNAME:IST', 'DTSTART:19701025T020000', 'RRULE:FREQ=YEARLY;BYMONTH=10;BYDAY=-1SU', 'END:STANDARD',
+    'END:VTIMEZONE', 'BEGIN:VEVENT', `UID:${e.id}@mutual-calendar`, `DTSTAMP:${utcStamp(Date.now())}`,
+    `SUMMARY:${icsEsc(`${TYPE_ICON[e.type] || '📌'} ${e.title}`)}`];
+  if (e.allDay) L.push(`DTSTART;VALUE=DATE:${ymd(e.date)}`, `DTEND;VALUE=DATE:${ymd(addDays(e.date, 1))}`);
+  else {
+    const s = mins(e.time)!, en = mins(e.endTime) != null && mins(e.endTime)! > s ? mins(e.endTime)! : s + 60;
+    const endDate = en >= 1440 ? addDays(e.date, 1) : e.date, em = en % 1440;
+    L.push(`DTSTART;TZID=Asia/Jerusalem:${ymd(e.date)}T${e.time.replace(':', '')}00`,
+           `DTEND;TZID=Asia/Jerusalem:${ymd(endDate)}T${pad(Math.floor(em / 60))}${pad(em % 60)}00`);
+  }
+  const BY = ['SU', 'MO', 'TU', 'WE', 'TH', 'FR', 'SA'];
+  const rr = ({ daily: 'FREQ=DAILY', weekly: 'FREQ=WEEKLY', monthly: 'FREQ=MONTHLY', yearly: 'FREQ=YEARLY',
+    weekdays: `FREQ=WEEKLY;BYDAY=${(e.days || []).map((d: number) => BY[d]).join(',')}` } as Record<string, string>)[e.repeat];
+  if (rr) L.push(`RRULE:${rr}${e.repeatUntil && e.repeat !== 'yearly' ? `;UNTIL=${ymd(e.repeatUntil)}${e.allDay ? '' : 'T235959Z'}` : ''}`);
+  if (e.location) L.push(`LOCATION:${icsEsc(e.location)}`);
+  L.push(`DESCRIPTION:${icsEsc([`${OWNER_TAG[e.owner] || ''} · מהיומן של ציפי ואהרון`, e.notes].filter(Boolean).join('\n'))}`);
+  if (e.status === 'cancelled') L.push('STATUS:CANCELLED');
+  for (const r of e.reminders || []) {
+    let trig: string;
+    if (r.kind === 'at') { if (!r.at) continue; const [d, t] = String(r.at).split('T'); trig = `TRIGGER;VALUE=DATE-TIME:${utcStamp(at(d, t || '00:00'))}`; }
+    else trig = `TRIGGER:${dur((e.allDay ? 540 : 0) - (Number(r.min) || 0))}`; // all-day: counted from 09:00, like the app
+    L.push('BEGIN:VALARM', 'ACTION:DISPLAY', `DESCRIPTION:${icsEsc(e.title)}`, trig, 'END:VALARM');
+  }
+  L.push('END:VEVENT', 'END:VCALENDAR');
+  return L.map(fold).join('\r\n') + '\r\n';
+}
+async function hmacHex(key: string, msg: string) {
+  const k = await crypto.subtle.importKey('raw', new TextEncoder().encode(key), { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']);
+  const sig = new Uint8Array(await crypto.subtle.sign('HMAC', k, new TextEncoder().encode(msg)));
+  return [...sig].map(b => b.toString(16).padStart(2, '0')).join('');
+}
+
 // which phones get a note: same rules as the in-app alerts
 export function wants(sub: { person?: string | null; alerts?: string }, n: Note) {
   if (n.to === 'clock') return !sub.person || sub.person === n.owner;
@@ -173,6 +251,17 @@ if (typeof Deno !== 'undefined') Deno.serve(async (req: Request) => {
     }
   };
 
+  // the iPhone calendar file of one event: GET ?ics=<id>&t=<signed token from the ics_token() database function>
+  const q = new URL(req.url).searchParams;
+  if (req.method === 'GET' && q.get('ics')) {
+    const id = q.get('ics')!;
+    if (!sec.cron_secret || q.get('t') !== await hmacHex(sec.cron_secret, id)) return new Response('not found', { status: 404, headers: CORS });
+    const { data: row } = await db.from('events').select('id,data').eq('id', id).maybeSingle();
+    if (!row) return new Response('האירוע לא נמצא', { status: 404, headers: { ...CORS, 'Content-Type': 'text/plain; charset=utf-8' } });
+    return new Response(ics({ ...row.data, id: row.id }), { headers: { ...CORS, 'Content-Type': 'text/calendar; charset=utf-8',
+      'Content-Disposition': 'inline; filename="event.ics"', 'Cache-Control': 'no-store' } });
+  }
+
   let body: any = {};
   try { body = await req.json(); } catch { /* empty body */ }
 
@@ -189,19 +278,33 @@ if (typeof Deno !== 'undefined') Deno.serve(async (req: Request) => {
 
   if (!sec.cron_secret || req.headers.get('x-cron-secret') !== sec.cron_secret) return json({ error: 'forbidden' }, 403);
 
+  // tell the other phone about added / edited / cancelled / deleted events (latest change per event)
+  const { data: changes } = await db.from('event_changes').select('*').eq('sent', false).order('id').limit(200);
+  let changed = 0;
+  if (changes && changes.length) {
+    await db.from('event_changes').update({ sent: true }).in('id', changes.map((c: any) => c.id));
+    const last = new Map<string, Change>();
+    for (const c of changes as Change[]) last.set(`${c.event_id}|${c.user_id}`, c);
+    const { data: subs } = await db.from('push_subs').select('*');
+    for (const c of last.values()) {
+      const n = changeNote(c);
+      for (const s of subs || []) if (wantsChange(s, c) && await push(s, { ...n, tag: `ch|${c.event_id}` })) changed++;
+    }
+  }
+
   const now = Date.now();
   const [{ data: ev }, { data: al }] = await Promise.all([
     db.from('events').select('id,data').limit(5000),
     db.from('alarms').select('id,data').limit(1000),
   ]);
   const notes = dueNotes((ev || []).map((r: any) => ({ ...r.data, id: r.id })), (al || []).map((r: any) => ({ ...r.data, id: r.id })), now);
-  if (!notes.length) return json({ sent: 0 });
+  if (!notes.length) return json({ sent: 0, changed });
 
   // claim each note once, so a late or doubled cron run never sends it twice
   const { data: claimed } = await db.from('push_sent').upsert(notes.map(n => ({ key: n.key })), { onConflict: 'key', ignoreDuplicates: true }).select('key');
   const mine = new Set((claimed || []).map((r: any) => r.key));
   const todo = notes.filter(n => mine.has(n.key));
-  if (!todo.length) return json({ sent: 0 });
+  if (!todo.length) return json({ sent: 0, changed });
 
   const { data: subs } = await db.from('push_subs').select('*');
   let sent = 0;
@@ -212,5 +315,5 @@ if (typeof Deno !== 'undefined') Deno.serve(async (req: Request) => {
       if (row) await db.from('alarms').update({ data: { ...row.data, enabled: false }, updated_at: new Date().toISOString() }).eq('id', row.id);
     }
   }
-  return json({ sent, notes: todo.length });
+  return json({ sent, notes: todo.length, changed });
 });

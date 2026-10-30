@@ -610,7 +610,8 @@ body { margin: 0; min-height: 100vh; }
       : `<div class="actions">
           ${S.readOnly ? '' : `<button class="btn primary" id="dEdit">עריכה</button><button class="btn ghost" id="dDup">שכפול</button>`}
           <button class="btn ghost" id="dCopy">העתקת פרטים</button>
-          <a class="btn ghost" href="${esc(gcalUrl(src))}" target="_blank" rel="noopener">📲 ליומן בטלפון</a>
+          ${cancelled ? '' : appleBtn(src.id, 'ליומן של אפל', 'ghost')}
+          <a class="btn ghost" href="${esc(gcalUrl(src))}" target="_blank" rel="noopener">Google Calendar</a>
           ${S.readOnly ? '' : `<button class="btn ghost" id="dCancel">${cancelled ? 'החזרת האירוע' : 'סימון כבוטל'}</button><button class="btn danger" id="dDel">מחיקה</button>`}
           <button class="btn ghost" id="close">סגירה</button></div>`}
       ${e.repeat !== 'none' && !S.readOnly ? '<div class="hint">זה אירוע חוזר. עריכה, ביטול ומחיקה חלים על כל המופעים.</div>' : ''}
@@ -737,7 +738,7 @@ body { margin: 0; min-height: 100vh; }
       days: f.repeat === 'weekdays' ? f.days : [], repeatUntil: f.repeat !== 'none' && f.repeat !== 'yearly' ? (f.repeatUntil || '') : '',
       location: (f.location || '').trim(), notes: (f.notes || '').trim(), reminders: f.reminders,
       reminderSound: f.reminderSound, startSound: f.startSound, attachments: f.attachments.map(({ id, name, type, size }) => ({ id, name, type, size })),
-      status: f.status || 'active', updatedAt: new Date().toISOString() };
+      status: f.status || 'active', updatedBy: store.get('me', '') || f.addedBy, updatedAt: new Date().toISOString() };
     if (!force && isActive(body) && !body.allDay) {
       const horizon = body.repeat === 'none' ? body.date : addDays(body.date > todayIso() ? body.date : todayIso(), 365);
       const from = body.repeat === 'none' ? body.date : (body.date > todayIso() ? body.date : todayIso());
@@ -747,11 +748,11 @@ body { margin: 0; min-height: 100vh; }
       if (found.length) return drawForm('', found);
     }
     try {
-      if (f.id) { await S.col.doc(f.id).set({ ...body, createdAt: f.createdAt || body.updatedAt }); toast('האירוע עודכן'); }
-      else { await S.col.add({ ...body, createdAt: body.updatedAt }); toast('האירוע נוסף ליומן'); }
+      if (f.id) { await S.col.doc(f.id).set({ ...body, createdAt: f.createdAt || body.updatedAt }); body.id = f.id; toast('האירוע עודכן'); }
+      else { body.id = await S.col.add({ ...body, createdAt: body.updatedAt }); toast('האירוע נוסף ליומן'); }
       for (const id of pendingDelete) { try { await S.assets?.delete(id); } catch {} }
       closeSheet();
-      if (isActive(body) && store.get('askPhoneCal', 'yes') === 'yes') openPhoneCal(body, f.id ? 'edit' : 'new');
+      if (isActive(body) && body.id && store.get('askPhoneCal', 'yes') === 'yes') openPhoneCal(norm(body), f.id ? 'edit' : 'new');
     } catch (e) {
       if (e && e.code === 'invalid_argument' && !f.id) { S.readOnly = true; closeSheet(); toast('אין לך הרשאה להוסיף אירועים ליומן הזה'); render(); return; }
       drawForm('השמירה לא הצליחה. בדקו את החיבור ונסו שוב.');
@@ -822,17 +823,39 @@ body { margin: 0; min-height: 100vh; }
     if (rr) q.set('recur', `RRULE:${rr}${until}`);
     return `https://calendar.google.com/calendar/render?${q.toString()}`;
   }
-  function openPhoneCal(e, kind = 'new') {
-    mode = 'phonecal';
-    const ty = TYPE[e.type] || TYPE.general;
+  // .ics link that opens the event straight in the iPhone (Apple) calendar; served by the send-reminders function
+  const icsCache = new Map();
+  function icsUrl(id) {
+    if (!id || !S.sb) return '';
+    if (icsCache.has(id)) return icsCache.get(id);
+    icsCache.set(id, '');
+    S.sb.rpc('ics_token', { p_id: id }).then(({ data }) => {
+      if (!data) { icsCache.delete(id); return; }
+      icsCache.set(id, `${window.CAL_CONFIG.supabaseUrl}/functions/v1/send-reminders?ics=${encodeURIComponent(id)}&t=${data}`);
+      if (mode === 'phonecal' && S.pc && S.pc.e.id === id) drawPhoneCal(); else if (mode === 'detail' && detail && detail.id === id) drawDetail();
+    }, () => icsCache.delete(id));
+    return '';
+  }
+  function appleBtn(id, label, cls = 'primary') {
+    const u = icsUrl(id);
+    return u ? `<a class="btn ${cls}" id="pcYes" href="${esc(u)}" target="_blank" rel="noopener">🍎 ${label}</a>`
+      : `<button type="button" class="btn ${cls}" disabled>🍎 ${label}…</button>`;
+  }
+  // kind: new | edit | gone; from: who made the change on the other phone (when opened from a notification)
+  function openPhoneCal(e, kind = 'new', from = '') { mode = 'phonecal'; S.pc = { e, kind, from }; drawPhoneCal(); }
+  function drawPhoneCal() {
+    const { e, kind, from } = S.pc, ty = TYPE[e.type] || TYPE.general;
+    const head = from ? `${kind === 'new' ? '➕ אירוע חדש' : kind === 'edit' ? '✏️ עדכון' : '🚫 ביטול'} מ${OWNERS[from] || from}`
+      : `📲 ${kind === 'edit' ? 'לעדכן גם ביומן בטלפון?' : kind === 'gone' ? 'למחוק גם ביומן בטלפון' : 'להוסיף גם ליומן בטלפון?'}`;
     setSheet(`<div class="scrim" id="scrim"><div class="sheet o-${esc(e.owner)}" role="dialog" aria-label="הוספה ליומן בטלפון">
-      <h2>📲 ${kind === 'edit' ? 'לעדכן גם ביומן בטלפון?' : kind === 'gone' ? 'למחוק גם ביומן בטלפון' : 'להוסיף גם ליומן בטלפון?'}</h2>
-      <div class="notice"><strong style="color:var(--fg)">${ty.icon} ${esc(e.title)}</strong><br>${esc(longDate(e.date))}${e.allDay ? ' · כל היום' : ' · ' + esc(e.time) + (e.endTime ? '–' + esc(e.endTime) : '')}</div>
-      ${kind === 'edit' ? '<div class="notice warn"><strong>שימו לב:</strong> אי אפשר לשנות מכאן אירוע שכבר נמצא ביומן בטלפון. הכפתור יוסיף אותו מחדש עם הפרטים המעודכנים, ואת הגרסה הישנה צריך למחוק ביומן בטלפון.</div>' : ''}
+      <h2>${head}</h2>
+      <div class="notice"><strong style="color:var(--fg)">${ty.icon} ${esc(e.title)}</strong><br>${esc(longDate(e.date))}${e.allDay ? ' · כל היום' : ' · ' + esc(e.time) + (e.endTime ? '–' + esc(e.endTime) : '')}${e.location ? ' · ' + esc(e.location) : ''}</div>
+      ${kind === 'edit' ? '<div class="notice warn"><strong>שימו לב:</strong> אם האירוע כבר נמצא ביומן בטלפון, ייתכן שהוא יופיע פעמיים. את הגרסה הישנה מוחקים ביומן של הטלפון.</div>' : ''}
       ${kind === 'gone' ? '<div class="notice warn">אי אפשר למחוק מכאן אירועים ביומן בטלפון. אם הוספתם אותו לשם, פתחו את יומן הטלפון ומחקו אותו.</div><div class="actions"><button class="btn primary" id="close">הבנתי</button></div>' : `
-      <div class="hint">האירוע ייפתח ב־Google Calendar, ושם לוחצים "שמירה". אם יומן Google מחובר ליומן של האייפון, האירוע יופיע גם שם. תזכורות קובעים ביומן של הטלפון עצמו.</div>
-      <div class="actions"><a class="btn primary" id="pcYes" href="${esc(gcalUrl(e))}" target="_blank" rel="noopener">${kind === 'edit' ? 'כן, להוסיף מעודכן' : 'כן, להוסיף'}</a><button class="btn ghost" id="close">לא הפעם</button></div>
-      `}<button class="linkbtn" id="pcNever">לא לשאול יותר</button>
+      <div class="hint">״יומן של אפל״ פותח את האירוע ביומן של האייפון, כולל החזרות והתזכורות, ושם לוחצים ״הוסף״. אם אתם עובדים עם Google Calendar, בחרו בו.</div>
+      <div class="actions">${appleBtn(e.id, kind === 'edit' ? 'עדכון ביומן של אפל' : 'ליומן של אפל')}<a class="btn ghost" id="pcGoogle" href="${esc(gcalUrl(e))}" target="_blank" rel="noopener">Google</a></div>
+      <div class="actions"><button class="btn ghost" id="close">לא הפעם</button></div>
+      `}${from ? '' : '<button class="linkbtn" id="pcNever">לא לשאול יותר</button>'}
     </div></div>`);
   }
 
@@ -1068,7 +1091,7 @@ tr.dh td{background:#F4F5F9;font-weight:700;padding-top:10px}tr.dh small{color:#
 
   // ---------- events ----------
   document.addEventListener('click', async e => {
-    if (e.target.closest('#pcYes')) { setTimeout(closeSheet, 300); return; }
+    if (e.target.closest('#pcYes') || e.target.closest('#pcGoogle')) { if (mode === 'phonecal') setTimeout(closeSheet, 300); return; }
     const t = e.target.closest('button');
     if (!t) { if (e.target.id === 'scrim') closeSheet(); return; }
     if (t.id === 'alarmOk') return dismissAlarm();
@@ -1096,7 +1119,7 @@ tr.dh td{background:#F4F5F9;font-weight:700;padding-top:10px}tr.dh small{color:#
       if (t.id === 'dEdit') return openForm(src);
       if (t.id === 'dDup') { const c = JSON.parse(JSON.stringify(norm(src))); c.id = null; c.createdAt = null; c.status = 'active'; c.date = detail.date; c.attachments = []; c.addedBy = store.get('me', c.addedBy); form = c; pendingDelete = []; mode = 'form'; return drawForm(); }
       if (t.id === 'dCopy') { const txt = eventText({ ...norm(src), date: detail.date }); try { await navigator.clipboard.writeText(txt); toast('הפרטים הועתקו, אפשר להדביק בוואטסאפ'); } catch { toast('ההעתקה לא הצליחה בתצוגה הזו'); } return; }
-      if (t.id === 'dCancel') { const ns = isActive(src) ? 'cancelled' : 'active'; try { await S.col.doc(src.id).update({ status: ns, updatedAt: new Date().toISOString() }); toast(ns === 'cancelled' ? 'האירוע סומן כבוטל' : 'האירוע הוחזר'); if (store.get('askPhoneCal', 'yes') === 'yes') openPhoneCal(norm({ ...src, date: detail.date }), ns === 'cancelled' ? 'gone' : 'new'); } catch { toast('השינוי לא נשמר. נסו שוב.'); } return; }
+      if (t.id === 'dCancel') { const ns = isActive(src) ? 'cancelled' : 'active'; try { await S.col.doc(src.id).update({ status: ns, updatedBy: store.get('me', '') || src.addedBy, updatedAt: new Date().toISOString() }); toast(ns === 'cancelled' ? 'האירוע סומן כבוטל' : 'האירוע הוחזר'); if (store.get('askPhoneCal', 'yes') === 'yes') openPhoneCal(norm({ ...src, date: detail.date }), ns === 'cancelled' ? 'gone' : 'new'); } catch { toast('השינוי לא נשמר. נסו שוב.'); } return; }
       if (t.id === 'dDel') { detail.confirm = true; return drawDetail(); }
       if (t.id === 'delNo') { detail.confirm = false; return drawDetail(); }
       if (t.id === 'delYes') {
@@ -1170,6 +1193,7 @@ tr.dh td{background:#F4F5F9;font-weight:700;padding-top:10px}tr.dh small{color:#
     }
     if (mode === 'settings' && id === 'sAlerts') { store.set('alerts', e.target.value); if (S.push) saveSub(S.push).catch(() => {}); }
     if (mode === 'settings' && id === 'sAskCal') store.set('askPhoneCal', e.target.checked ? 'yes' : 'no');
+    if (mode === 'settings' && id === 'sNotifyCh') { store.set('notifyChanges', e.target.checked ? 'yes' : 'no'); if (S.push) saveSub(S.push).catch(() => {}); }
     if (mode === 'share' && (id === 'shFrom' || id === 'shTo' || id === 'shWho')) {
       S.share = { from: $('#shFrom').value || S.share.from, to: $('#shTo').value || S.share.to, who: $('#shWho').value };
       if (S.share.to < S.share.from) S.share.to = S.share.from;
@@ -1207,7 +1231,7 @@ tr.dh td{background:#F4F5F9;font-weight:700;padding-top:10px}tr.dh small{color:#
     const chk = ({ error }) => { if (error) throw error; };
     const now = () => new Date().toISOString();
     return {
-      add: body => t().insert({ data: body }).then(chk),
+      add: async body => { const { data, error } = await t().insert({ data: body }).select('id').single(); if (error) throw error; return data.id; },
       doc: id => ({
         set: body => t().upsert({ id, data: body, updated_at: now() }).then(chk),
         update: async patch => {
@@ -1302,12 +1326,13 @@ tr.dh td{background:#F4F5F9;font-weight:700;padding-top:10px}tr.dh small{color:#
         <div class="actions"><button type="button" class="btn ghost" id="pushTest">שליחת התראת בדיקה</button><button type="button" class="btn ghost" id="pushOff">כיבוי</button></div>`,
     }[pushState()];
     return `<div class="box"><h3>🔔 התראות גם כשהיומן סגור</h3>${body}${S.pushErr ? `<div class="err">${esc(S.pushErr)}</div>` : ''}
+      ${pushState() === 'on' ? `<label class="check"><input type="checkbox" id="sNotifyCh" ${store.get('notifyChanges', 'yes') === 'yes' ? 'checked' : ''}> התראה כשמישהו אחר מוסיף, משנה או מבטל אירוע</label>` : ''}
       <div class="hint">ההתראה מגיעה עם הצליל הרגיל של הטלפון, לפי הבחירה ״על אילו אירועים לצלצל״.</div></div>`;
   }
   const b64u = s => { const b = atob((s + '='.repeat((4 - s.length % 4) % 4)).replace(/-/g, '+').replace(/_/g, '/')); return Uint8Array.from(b, c => c.charCodeAt(0)); };
   async function saveSub(sub) {
     const { error } = await S.sb.from('push_subs').upsert({ endpoint: sub.endpoint, sub: sub.toJSON(), person: store.get('me', '') || null,
-      alerts: store.get('alerts', 'mine'), user_agent: navigator.userAgent.slice(0, 200), updated_at: new Date().toISOString() });
+      alerts: store.get('alerts', 'mine'), notify_changes: store.get('notifyChanges', 'yes') === 'yes', user_agent: navigator.userAgent.slice(0, 200), updated_at: new Date().toISOString() });
     if (error) throw error;
   }
   async function refreshPush() {
@@ -1346,7 +1371,13 @@ tr.dh td{background:#F4F5F9;font-weight:700;padding-top:10px}tr.dh small{color:#
   // a tapped notification opens the app on its event (or on the alarms)
   function handleUrl(u) {
     const p = u.searchParams;
-    if (p.get('e')) { if (S.view === 'alarms') { S.view = 'list'; setViewButtons(); render(); } openDetail(p.get('e'), p.get('d') || undefined); }
+    if (p.get('e')) {
+      if (S.view === 'alarms') { S.view = 'list'; setViewButtons(); render(); }
+      const ev = S.events.find(x => x.id === p.get('e'));
+      if (!ev) { toast('האירוע כבר לא ביומן'); return; }
+      if (p.get('cal')) openPhoneCal(norm({ ...ev, date: p.get('d') || ev.date }), p.get('cal'), ev.updatedBy || ev.addedBy || '');
+      else openDetail(p.get('e'), p.get('d') || undefined);
+    }
     else if (p.get('alarm')) { S.view = 'alarms'; setViewButtons(); render(); checkAlerts(); }
   }
   let urlDone = false;

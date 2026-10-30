@@ -1,6 +1,7 @@
 -- Shared calendar: one-time database setup.
 -- Paste the whole file into Supabase → SQL Editor → New query → Run. Safe to run again.
 -- Before running, replace __PROJECT_URL__ below with the project URL (https://xxxx.supabase.co).
+-- Then run every file in supabase/migrations/ in order.
 
 -- ---------- data ----------
 create table if not exists public.events (

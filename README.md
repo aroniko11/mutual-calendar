@@ -16,7 +16,7 @@
 ## הקמה (פעם אחת)
 
 1. **Supabase:** פותחים פרויקט חדש ב־[supabase.com](https://supabase.com). ב־Project Settings → API מעתיקים את Project URL ואת המפתח `anon` (או `publishable`) ל־`config.js`.
-2. **מסד נתונים:** ב־`supabase/setup.sql` מחליפים את `__PROJECT_URL__` בכתובת הפרויקט, ומריצים את כל הקובץ ב־SQL Editor.
+2. **מסד נתונים:** ב־`supabase/setup.sql` מחליפים את `__PROJECT_URL__` בכתובת הפרויקט, ומריצים את כל הקובץ ב־SQL Editor. אחריו מריצים, לפי הסדר, כל קובץ בתיקייה `supabase/migrations/`.
 3. **פונקציית ההתראות:** Edge Functions → Deploy a new function → Via Editor. השם חייב להיות `send-reminders`. מדביקים את `supabase/functions/send-reminders/index.ts` ולוחצים Deploy. אחר כך, בהגדרות הפונקציה, מכבים את **Verify JWT** (הקריאה מהתזמון נבדקת בסוד משלה).
 4. **משתמשים:** Authentication → Users → Add user → Create new user, עם אימייל וסיסמה לכל אחד, ומסמנים Auto Confirm. ב־Authentication → Sign In / Providers מכבים את **Allow new users to sign up**, כדי שרק שניכם תוכלו להיכנס.
 5. **האתר:** ב־GitHub, Settings → Pages → Deploy from a branch, בוחרים את הענף `main` ואת התיקייה `/ (root)`. הכתובת תהיה `https://aroniko11.github.io/mutual-calendar/`.
@@ -27,6 +27,10 @@
 2. כפתור השיתוף → ״הוספה למסך הבית״.
 3. פותחים את היומן מהאייקון, ⚙ → בוחרים מי משתמש בטלפון → ״הפעלת התראות״ → מאשרים.
 4. ״שליחת התראת בדיקה״ מוודאת שהכול עובד.
+
+## התראות על שינויים
+
+כשאחד מכם מוסיף, משנה, מבטל או מוחק אירוע, הטלפון של השני מקבל התראה תוך דקה. לחיצה עליה פותחת את האירוע עם כפתור ״ליומן של אפל״, שפותח קובץ .ics ישר ביומן של האייפון, כולל חזרות ותזכורות. אפשר לכבות את ההתראות האלה בטלפון מסוים, ב־⚙.
 
 ## מגבלות
 
